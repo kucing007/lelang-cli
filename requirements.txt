@@ -1,0 +1,8 @@
+playwright>=1.40.0
+click>=8.1.0
+playwright
+click
+rich
+httpx
+python-dotenv
+pillow>=1.0.0
