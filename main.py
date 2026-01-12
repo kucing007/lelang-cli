@@ -146,11 +146,23 @@ def logout():
 
 @cli.command("set-token")
 @click.argument("token")
-@click.option("--refresh", "-r", default=None)
+@click.option("--refresh", "-r", default=None, help="Refresh token (optional)")
 def set_token(token: str, refresh: str = None):
-    """Set token manual"""
+    """Set token manual dari browser.
+    
+    \b
+    Cara mendapatkan token:
+    1. Login ke https://lelang.go.id
+    2. Buka DevTools (F12) → Application → Local Storage
+    3. Copy value dari key 'token' atau 'accessToken'
+    
+    \b
+    Contoh penggunaan:
+      python main.py set-token "eyJhbGciOiJIUzI1NiIsInR5cCI6..."
+    """
     if set_token_manual(token, refresh):
         print_success("Token disimpan!")
+
 
 
 @cli.command("refresh-token")
