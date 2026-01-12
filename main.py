@@ -507,10 +507,21 @@ def _autobid_interactive(lot_lelang_id: str, kelipatan_bid: int, pin_bidding: st
     poll_interval = click.prompt("Interval (ms)", type=int, default=20)
     poll_interval = max(10, min(500, poll_interval))  # Clamp between 10-500ms
     
+    # Get sniper mode - start bidding X seconds before auction ends
+    console.print(f"\n[bold yellow]🎯 SNIPER MODE[/bold yellow]")
+    console.print("[dim]Bot akan standby dan mulai bid di detik-detik terakhir[/dim]")
+    console.print("[dim]Masukkan 0 untuk bid langsung (tanpa sniper mode)[/dim]")
+    sniper_seconds = click.prompt("Mulai bid (detik sebelum selesai)", type=int, default=10)
+    sniper_seconds = max(0, min(300, sniper_seconds))  # Clamp between 0-300 seconds
+    
     console.print(f"\n[bold]Konfigurasi Bot:[/bold]")
     console.print(f"  Budget Maksimal: [green]{format_currency_full(max_budget)}[/green]")
     console.print(f"  Kelipatan Bid: {format_currency_full(kelipatan_bid)}")
     console.print(f"  Polling Interval: {poll_interval}ms")
+    if sniper_seconds > 0:
+        console.print(f"  [yellow]🎯 Sniper Mode: Mulai bid {sniper_seconds} detik sebelum selesai[/yellow]")
+    else:
+        console.print(f"  Sniper Mode: [dim]Disabled (bid langsung)[/dim]")
     
     if not click.confirm("\n[bold]Mulai Bot Autobid?[/bold]"):
         print_info("Dibatalkan.")
@@ -525,7 +536,8 @@ def _autobid_interactive(lot_lelang_id: str, kelipatan_bid: int, pin_bidding: st
         pin_bidding=pin_bidding,
         poll_interval_ms=poll_interval,
         tgl_selesai=tgl_selesai,
-        my_user_auction_id=my_user_auction_id
+        my_user_auction_id=my_user_auction_id,
+        sniper_seconds=sniper_seconds
     )
     
     _wait_for_enter()

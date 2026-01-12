@@ -1,8 +1,9 @@
 """
 AutoBid Bot for Lelang CLI
-Ultra-fast burst detection with async concurrent polling
+Ultra-fast burst detection with async concurrent polling and SNIPER MODE
 """
 import time
+import random
 import asyncio
 import threading
 import httpx
@@ -52,7 +53,7 @@ def format_countdown(seconds: float) -> str:
 
 
 class AutoBidBot:
-    """High-speed autobid bot with burst detection and countdown timer"""
+    """High-speed autobid bot with burst detection, countdown timer, and SNIPER MODE"""
     
     def __init__(
         self, 
@@ -62,19 +63,22 @@ class AutoBidBot:
         pin_bidding: str,
         poll_interval_ms: int = 50,
         tgl_selesai: str = "",
-        my_user_auction_id: str = ""
+        my_user_auction_id: str = "",
+        sniper_seconds: int = 0  # 0 = bid immediately, >0 = wait until X seconds before end
     ):
         self.lot_id = lot_lelang_id
         self.max_budget = max_budget
         self.kelipatan_bid = kelipatan_bid
         self.pin = pin_bidding
         self.poll_interval = poll_interval_ms / 1000  # Convert to seconds
+        self.sniper_seconds = sniper_seconds
         
         # Parse end time for countdown
         self.end_time = parse_datetime(tgl_selesai)
         
         # State
         self.running = False
+        self.bidding_active = sniper_seconds == 0  # Start active if not sniper mode
         self.last_bid_amount = 0
         self.last_bidder_id = ""  # userAuctionId of last bidder
         self.my_user_auction_id = my_user_auction_id  # My own userAuctionId
@@ -84,6 +88,7 @@ class AutoBidBot:
         self.avg_response_time_ms = 0
         self.last_response_time_ms = 0
         self.is_my_bid = False  # Track if last bid is mine
+        self.status_message = ""  # Message to display in panel (no scrolling)
         
         # Stats
         self.start_time = None
@@ -242,19 +247,47 @@ class AutoBidBot:
             return False, str(e), elapsed_ms
     
     def _create_status_panel(self) -> Panel:
-        """Create rich status panel for live display with countdown"""
+        """Create rich status panel for live display with countdown and sniper mode"""
         table = Table(box=box.SIMPLE, show_header=False, padding=(0, 1))
         table.add_column("Label", style="cyan", width=22)
         table.add_column("Value", style="white", width=35)
         
-        status = "[green]RUNNING[/green]" if self.running else "[red]STOPPED[/red]"
+        # Sniper mode status
+        if self.sniper_seconds > 0:
+            if self.bidding_active:
+                status = "[bold green]🎯 SNIPER ACTIVE[/bold green]"
+            else:
+                status = "[yellow]⏳ STANDBY (Sniper)[/yellow]"
+        else:
+            status = "[green]RUNNING[/green]" if self.running else "[red]STOPPED[/red]"
         table.add_row("Status", status)
         table.add_row("Server Time", get_server_time_str())
+        
+        # Bot duration
+        if self.start_time:
+            duration = time.time() - self.start_time
+            hours = int(duration // 3600)
+            minutes = int((duration % 3600) // 60)
+            secs = int(duration % 60)
+            if hours > 0:
+                duration_str = f"{hours}h {minutes}m {secs}s"
+            elif minutes > 0:
+                duration_str = f"{minutes}m {secs}s"
+            else:
+                duration_str = f"{secs}s"
+            table.add_row("Bot Duration", f"[dim]{duration_str}[/dim]")
         
         # Countdown timer
         remaining = self.get_remaining_seconds()
         table.add_row("⏱️  Sisa Waktu", format_countdown(remaining))
         
+        # Sniper countdown - when bidding will start
+        if self.sniper_seconds > 0 and not self.bidding_active:
+            time_to_snipe = remaining - self.sniper_seconds
+            if time_to_snipe > 0:
+                table.add_row("🎯 Bid dimulai dalam", format_countdown(time_to_snipe))
+            else:
+                table.add_row("🎯 Bid dimulai dalam", "[green bold]SEKARANG![/green bold]")
         table.add_row("", "")
         table.add_row("Budget Maksimal", f"[yellow]{format_currency_full(self.max_budget)}[/yellow]")
         table.add_row("Kelipatan Bid", format_currency_full(self.kelipatan_bid))
@@ -269,8 +302,20 @@ class AutoBidBot:
         table.add_row("", "")
         table.add_row("Total Bid Submitted", str(self.total_bids_submitted))
         table.add_row("Total API Requests", str(self.total_requests))
+        
+        # Show polling mode
+        if self.bidding_active:
+            table.add_row("Polling Mode", "[green bold]⚡ BURST[/green bold]")
+        else:
+            table.add_row("Polling Mode", "[dim]🐢 Slow (anti-spam)[/dim]")
+        
         table.add_row("Last Response Time", f"[bold]{self.last_response_time_ms:.0f}ms[/bold]")
         table.add_row("Avg Response Time", f"{self.avg_response_time_ms:.0f}ms")
+        
+        # Status message (replaces console.print for no scrolling)
+        if self.status_message:
+            table.add_row("", "")
+            table.add_row("[bold]Message[/bold]", f"[yellow]{self.status_message}[/yellow]")
         
         if self.errors:
             table.add_row("", "")
@@ -283,105 +328,138 @@ class AutoBidBot:
             border_style="cyan"
         )
     
+    def _refresh_display(self):
+        """Refresh display in place using ANSI escape codes"""
+        # Move cursor to home position (top-left) without clearing scrollback
+        print("\033[H\033[J", end="")  # ESC[H = cursor home, ESC[J = clear from cursor
+        console.print(self._create_status_panel())
+    
     def run(self):
-        """Run the autobid bot with live status display"""
+        """Run the autobid bot with live status display and sniper mode"""
         self.running = True
         self.start_time = time.time()
         total_response_time = 0
         
-        console.print("\n[bold green]🚀 Bot Autobid dimulai![/bold green]")
-        console.print(f"[dim]Polling interval: {self.poll_interval * 1000:.0f}ms[/dim]")
-        
-        # Fetch initial bid data before starting
-        console.print("[dim]Mengambil data penawaran terakhir...[/dim]")
-        console.print(f"[dim]My PesertaId: {self.my_user_auction_id}[/dim]")  # DEBUG
-        initial_bid, initial_bidder, my_bid_from_history, initial_time = self.get_latest_bid_fast()
-        self.total_requests += 1
-        
-        # DEBUG: Show bidder ID from history
-        console.print(f"[dim]Last bidder ID: {initial_bidder}[/dim]")
-        console.print(f"[dim]Match: {initial_bidder == self.my_user_auction_id}[/dim]")
-        
-        if initial_bid > 0:
-            self.last_bid_amount = initial_bid
-            self.last_bidder_id = initial_bidder
-            self.is_my_bid = (initial_bidder == self.my_user_auction_id) if self.my_user_auction_id else False
-            # Set my_last_bid from history search
-            if my_bid_from_history > 0:
-                self.my_last_bid = my_bid_from_history
-            console.print(f"[green]✓ Penawaran terakhir: {format_currency_full(initial_bid)}[/green]")
-            if my_bid_from_history > 0:
-                console.print(f"[cyan]✓ Bid saya terakhir: {format_currency_full(my_bid_from_history)}[/cyan]")
+        # Set initial status message
+        if self.sniper_seconds > 0:
+            self.status_message = f"🎯 Sniper Mode: {self.sniper_seconds}s sebelum selesai"
         else:
-            console.print("[yellow]! Belum ada penawaran atau gagal mengambil data[/yellow]")
-            if self.errors:
-                console.print(f"[red]  Error: {self.errors[-1][:50]}[/red]")
+            self.status_message = "Mengambil data..."
         
-        console.print("")  # Empty line before live display
-        
+        # Enter alternate screen buffer (separate screen, no scrollback pollution)
+        print("\033[?1049h", end="")  # Enter alternate screen buffer
         try:
-            with Live(self._create_status_panel(), console=console, refresh_per_second=10) as live:
-                while self.running:
-                    # Check if auction has ended
-                    remaining = self.get_remaining_seconds()
-                    if remaining <= 0:
-                        console.print("\n[yellow]⏱️ Lelang telah berakhir![/yellow]")
-                        self.running = False
-                        break
+            # Initial panel
+            self._refresh_display()
+            
+            # Fetch initial data
+            initial_bid, initial_bidder, my_bid_from_history, initial_time = self.get_latest_bid_fast()
+            self.total_requests += 1
+            
+            if initial_bid > 0:
+                self.last_bid_amount = initial_bid
+                self.last_bidder_id = initial_bidder
+                self.is_my_bid = (initial_bidder == self.my_user_auction_id) if self.my_user_auction_id else False
+                if my_bid_from_history > 0:
+                    self.my_last_bid = my_bid_from_history
+                self.status_message = "✓ Data loaded"
+            else:
+                self.status_message = "! Belum ada penawaran"
+            
+            # Main loop with manual refresh
+            while self.running:
+                # Check if auction has ended
+                remaining = self.get_remaining_seconds()
+                if remaining <= 0:
+                    self.status_message = "⏱️ Lelang telah berakhir!"
+                    self.running = False
+                    self._refresh_display()
+                    break
+                
+                # Sniper mode: Activate bidding when time is right
+                if not self.bidding_active and self.sniper_seconds > 0:
+                    if remaining <= self.sniper_seconds:
+                        self.bidding_active = True
+                        self.status_message = f"🎯 SNIPER ACTIVATED! ({remaining:.1f}s)"
+                
+                # Concurrent poll for latest bid (3 parallel requests, use fastest)
+                current_bid, bidder_id, my_bid_now, response_time = self.get_latest_bid_concurrent(3)
+                self.total_requests += 3  # Count all 3 concurrent requests
+                self.last_response_time_ms = response_time
+                total_response_time += response_time
+                self.avg_response_time_ms = total_response_time / (self.total_requests // 3)
+                
+                # Update my_last_bid from history
+                if my_bid_now > 0:
+                    self.my_last_bid = my_bid_now
+                if current_bid > 0:
+                    self.last_bid_amount = current_bid
+                    self.last_bidder_id = bidder_id
                     
-                    # Concurrent poll for latest bid (3 parallel requests, use fastest)
-                    current_bid, bidder_id, my_bid_now, response_time = self.get_latest_bid_concurrent(3)
-                    self.total_requests += 3  # Count all 3 concurrent requests
-                    self.last_response_time_ms = response_time
-                    total_response_time += response_time
-                    self.avg_response_time_ms = total_response_time / (self.total_requests // 3)
+                    # Check if this bid is mine
+                    self.is_my_bid = (bidder_id == self.my_user_auction_id) if self.my_user_auction_id else False
                     
-                    # Update my_last_bid from history
-                    if my_bid_now > 0:
-                        self.my_last_bid = my_bid_now
-                    if current_bid > 0:
-                        self.last_bid_amount = current_bid
-                        self.last_bidder_id = bidder_id
+                    # Only bid if: bidding is active AND last bidder is NOT me
+                    if self.bidding_active and not self.is_my_bid and current_bid >= self.my_last_bid:
+                        # Calculate next bid
+                        next_bid = current_bid + self.kelipatan_bid
                         
-                        # Check if this bid is mine
-                        self.is_my_bid = (bidder_id == self.my_user_auction_id) if self.my_user_auction_id else False
-                        
-                        # Only bid if last bidder is NOT me
-                        if not self.is_my_bid and current_bid >= self.my_last_bid:
-                            # Calculate next bid
-                            next_bid = current_bid + self.kelipatan_bid
+                        # Check budget
+                        if next_bid <= self.max_budget:
+                            # Submit bid immediately!
+                            success, msg, submit_time = self.submit_bid_fast(next_bid)
+                            self.total_requests += 1
                             
-                            # Check budget
-                            if next_bid <= self.max_budget:
-                                # Submit bid immediately!
-                                success, msg, submit_time = self.submit_bid_fast(next_bid)
-                                self.total_requests += 1
-                                
-                                if success:
-                                    self.my_last_bid = next_bid
-                                    self.total_bids_submitted += 1
-                                    self.last_response_time_ms = submit_time
-                                else:
-                                    self.errors.append(msg)
+                            if success:
+                                self.my_last_bid = next_bid
+                                self.total_bids_submitted += 1
+                                self.last_response_time_ms = submit_time
                             else:
-                                # Budget exceeded
-                                console.print(f"\n[yellow]⚠️ Budget exceeded! Next bid {format_currency_full(next_bid)} > max {format_currency_full(self.max_budget)}[/yellow]")
-                                self.running = False
-                                break
+                                self.errors.append(msg)
+                        else:
+                            # Budget exceeded
+                            self.status_message = f"⚠️ Budget exceeded! {format_currency_full(next_bid)} > max"
+                            self.running = False
+                            self._refresh_display()
+                            break
+                
+                # Update display in place
+                self._refresh_display()
                     
-                    # Update display
-                    live.update(self._create_status_panel())
-                    
-                    # Wait for next poll
+                # Adaptive polling interval:
+                # - STANDBY: Slow polling (60-180 seconds random) to avoid spam detection
+                # - SNIPER ACTIVE: Fast burst polling
+                if self.bidding_active:
+                    # Fast burst polling - short sleep
                     time.sleep(self.poll_interval)
+                else:
+                    # Slow random polling during standby (60-180 seconds)
+                    slow_interval = random.uniform(60, 180)
+                    # But check more frequently as we approach sniper activation
+                    time_to_snipe = remaining - self.sniper_seconds
+                    if time_to_snipe < 300:  # Less than 5 min to activation
+                        slow_interval = min(slow_interval, 30)  # Max 30s
+                    if time_to_snipe < 60:  # Less than 1 min to activation
+                        slow_interval = min(slow_interval, 5)  # Max 5s
+                    
+                    # Sleep in small increments to keep display updating
+                    sleep_end = time.time() + slow_interval
+                    while time.time() < sleep_end and self.running:
+                        # Update display every 0.5 seconds
+                        self._refresh_display()
+                        time.sleep(0.5)
+                        # Check if sniper should activate now
+                        if self.get_remaining_seconds() <= self.sniper_seconds:
+                            break
                     
         except KeyboardInterrupt:
             self.running = False
-            console.print("\n[yellow]Bot dihentikan oleh user.[/yellow]")
         finally:
+            # Exit alternate screen buffer (return to normal terminal)
+            print("\033[?1049l", end="")  # Exit alternate screen buffer
             self._cleanup()
         
-        # Print summary
+        # Print summary (now in normal screen)
         self._print_summary()
     
     def _cleanup(self):
@@ -411,7 +489,8 @@ def run_autobid_bot(
     pin_bidding: str,
     poll_interval_ms: int = 50,
     tgl_selesai: str = "",
-    my_user_auction_id: str = ""
+    my_user_auction_id: str = "",
+    sniper_seconds: int = 0
 ):
     """
     Run autobid bot with given parameters
@@ -424,6 +503,7 @@ def run_autobid_bot(
         poll_interval_ms: Polling interval in milliseconds (default 50ms)
         tgl_selesai: Auction end time (ISO format)
         my_user_auction_id: User's own auction ID to avoid self-bidding
+        sniper_seconds: Start bidding X seconds before auction ends (0 = immediate)
     """
     bot = AutoBidBot(
         lot_lelang_id=lot_lelang_id,
@@ -432,6 +512,7 @@ def run_autobid_bot(
         pin_bidding=pin_bidding,
         poll_interval_ms=poll_interval_ms,
         tgl_selesai=tgl_selesai,
-        my_user_auction_id=my_user_auction_id
+        my_user_auction_id=my_user_auction_id,
+        sniper_seconds=sniper_seconds
     )
     bot.run()
