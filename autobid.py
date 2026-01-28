@@ -320,6 +320,14 @@ class AutoBidBot:
         table.add_row("Last Response Time", f"[bold]{self.last_response_time_ms:.0f}ms[/bold]")
         table.add_row("Avg Response Time", f"{self.avg_response_time_ms:.0f}ms")
         
+        # DEBUG: Show why bot is/isn't bidding
+        table.add_row("", "")
+        table.add_row("[dim]--- DEBUG ---[/dim]", "")
+        table.add_row("Bidding Active", "[green]YES[/green]" if self.bidding_active else "[red]NO (waiting sniper)[/red]")
+        table.add_row("Is My Bid", "[green]YES (don't bid)[/green]" if self.is_my_bid else "[yellow]NO (can bid)[/yellow]")
+        table.add_row("My UserAuctionId", f"[dim]{self.my_user_auction_id[:20]}...[/dim]" if self.my_user_auction_id else "[red]NOT SET![/red]")
+        table.add_row("Last Bidder Id", f"[dim]{self.last_bidder_id[:20]}...[/dim]" if self.last_bidder_id else "[dim]None[/dim]")
+        
         # Status message (replaces console.print for no scrolling)
         if self.status_message:
             table.add_row("", "")
