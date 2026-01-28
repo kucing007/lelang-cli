@@ -299,6 +299,14 @@ class AutoBidBot:
         else:
             table.add_row("Penawaran Terakhir", f"[green]{format_currency_full(self.last_bid_amount)}[/green] [yellow](Lawan)[/yellow]")
         table.add_row("Bid Saya Terakhir", f"[cyan]{format_currency_full(self.my_last_bid)}[/cyan]")
+        
+        # Show next bid info
+        if self.last_bid_amount > 0:
+            next_bid_amount = self.last_bid_amount + self.kelipatan_bid
+            if next_bid_amount <= self.max_budget:
+                table.add_row("Next Bid", f"[green]{format_currency_full(next_bid_amount)}[/green]")
+            else:
+                table.add_row("Next Bid", f"[red]{format_currency_full(next_bid_amount)} (OVER BUDGET!)[/red]")
         table.add_row("", "")
         table.add_row("Total Bid Submitted", str(self.total_bids_submitted))
         table.add_row("Total API Requests", str(self.total_requests))
@@ -400,7 +408,8 @@ class AutoBidBot:
                     self.is_my_bid = (bidder_id == self.my_user_auction_id) if self.my_user_auction_id else False
                     
                     # Only bid if: bidding is active AND last bidder is NOT me
-                    if self.bidding_active and not self.is_my_bid and current_bid >= self.my_last_bid:
+                    # NOTE: We bid whenever opponent bids, regardless of our previous bid amount
+                    if self.bidding_active and not self.is_my_bid:
                         # Calculate next bid
                         next_bid = current_bid + self.kelipatan_bid
                         
